@@ -172,6 +172,20 @@ pub trait ECDSAP256KeyPairLike {
             Ok(signature.as_ref().to_vec())
         })
     }
+    fn sign_oauth2_jwt<CustomClaims: Serialize + DeserializeOwned>(
+        &self,
+        jwt_header: JWTHeader,
+        claims: JWTClaims<CustomClaims>,
+    ) -> Result<String, Error> {
+        Token::build(&jwt_header, claims, |authenticated| {
+            let mut digest = hmac_sha256::Hash::new();
+            digest.update(authenticated.as_bytes());
+            let rng = rand::thread_rng();
+            let signature: ecdsa::Signature =
+                self.key_pair().as_ref().sign_digest_with_rng(rng, digest);
+            Ok(signature.as_ref().to_vec())
+        })
+    }
 }
 
 pub trait ECDSAP256PublicKeyLike {
@@ -202,7 +216,31 @@ pub trait ECDSAP256PublicKeyLike {
             },
         )
     }
-
+    fn verify_oauth2_jwt<CustomClaims: Serialize + DeserializeOwned>(
+        &self,
+        jwt_sig_type: &'static str,
+        token: &str,
+        options: Option<VerificationOptions>,
+    ) -> Result<JWTClaims<CustomClaims>, Error> {
+        println!("verify_oauth2_jwt: {}", Self::jwt_alg_name());
+        Token::verify_oauth2_jwt(
+            Self::jwt_alg_name(),
+            jwt_sig_type,
+            token,
+            options,
+            |authenticated, signature| {
+                let ecdsa_signature = ecdsa::Signature::try_from(signature)
+                    .map_err(|_| JWTError::InvalidSignature)?;
+                let mut digest = hmac_sha256::Hash::new();
+                digest.update(authenticated.as_bytes());
+                self.public_key()
+                    .as_ref()
+                    .verify_digest(digest, &ecdsa_signature)
+                    .map_err(|_| JWTError::InvalidSignature)?;
+                Ok(())
+            },
+        )
+    }
     fn create_key_id(&mut self) -> &str {
         self.set_key_id(
             Base64UrlSafeNoPadding::encode_to_string(hmac_sha256::Hash::hash(

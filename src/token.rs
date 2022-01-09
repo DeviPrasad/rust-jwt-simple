@@ -88,7 +88,7 @@ impl TokenMetadata {
 }
 
 impl Token {
-    pub(crate) fn build<AuthenticationOrSignatureFn, CustomClaims: Serialize + DeserializeOwned>(
+    pub fn build<AuthenticationOrSignatureFn, CustomClaims: Serialize + DeserializeOwned>(
         jwt_header: &JWTHeader,
         claims: JWTClaims<CustomClaims>,
         authentication_or_signature_fn: AuthenticationOrSignatureFn,
@@ -112,7 +112,7 @@ impl Token {
         Ok(token)
     }
 
-    pub(crate) fn verify<AuthenticationOrSignatureFn, CustomClaims: Serialize + DeserializeOwned>(
+    pub fn verify<AuthenticationOrSignatureFn, CustomClaims: Serialize + DeserializeOwned>(
         jwt_alg_name: &'static str,
         token: &str,
         options: Option<VerificationOptions>,
@@ -158,6 +158,52 @@ impl Token {
         Ok(claims)
     }
 
+    pub fn verify_oauth2_jwt<AuthenticationOrSignatureFn, CustomClaims: Serialize + DeserializeOwned>(
+        jwt_alg_name: &'static str,
+        jwt_sig_type: &'static str,
+        token: &str,
+        options: Option<VerificationOptions>,
+        authentication_or_signature_fn: AuthenticationOrSignatureFn,
+    ) -> Result<JWTClaims<CustomClaims>, Error>
+    where
+        AuthenticationOrSignatureFn: FnOnce(&str, &[u8]) -> Result<(), Error>,
+    {
+        let options = options.unwrap_or_default();
+        let mut parts = token.split('.');
+        let jwt_header_b64 = parts.next().ok_or(JWTError::CompactEncodingError)?;
+        ensure!(
+            jwt_header_b64.len() <= MAX_HEADER_LENGTH,
+            JWTError::HeaderTooLarge
+        );
+        let claims_b64 = parts.next().ok_or(JWTError::CompactEncodingError)?;
+        let authentication_tag_b64 = parts.next().ok_or(JWTError::CompactEncodingError)?;
+        ensure!(parts.next().is_none(), JWTError::CompactEncodingError);
+        let jwt_header: JWTHeader = serde_json::from_slice(
+            &Base64UrlSafeNoPadding::decode_to_vec(jwt_header_b64, None)?,
+        )?;
+        if let Some(signature_type) = &jwt_header.signature_type {
+            ensure!(signature_type == jwt_sig_type, JWTError::NotJWT);
+        }
+        ensure!(
+            jwt_header.algorithm == jwt_alg_name,
+            JWTError::AlgorithmMismatch
+        );
+        if let Some(required_key_id) = &options.required_key_id {
+            if let Some(key_id) = &jwt_header.key_id {
+                ensure!(key_id == required_key_id, JWTError::KeyIdentifierMismatch);
+            } else {
+                bail!(JWTError::MissingJWTKeyIdentifier)
+            }
+        }
+        let authentication_tag =
+            Base64UrlSafeNoPadding::decode_to_vec(&authentication_tag_b64, None)?;
+        let authenticated = &token[..jwt_header_b64.len() + 1 + claims_b64.len()];
+        authentication_or_signature_fn(authenticated, &authentication_tag)?;
+        let claims: JWTClaims<CustomClaims> =
+            serde_json::from_slice(&Base64UrlSafeNoPadding::decode_to_vec(&claims_b64, None)?)?;
+        claims.validate(&options)?;
+        Ok(claims)
+    }
     /// Decode token information that can be usedful prior to signature/tag verification
     pub fn decode_metadata(token: &str) -> Result<TokenMetadata, Error> {
         let mut parts = token.split('.');

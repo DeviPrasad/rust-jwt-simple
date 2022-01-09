@@ -293,6 +293,7 @@ pub mod prelude {
     pub use crate::claims::*;
     pub use crate::common::*;
     pub use crate::token::*;
+    pub use crate::jwt_header::*;
     pub use coarsetime::{self, Clock, Duration, UnixTimeStamp};
     pub use ct_codecs::{
         Base64, Base64NoPadding, Base64UrlSafe, Base64UrlSafeNoPadding, Decoder as _, Encoder as _,
